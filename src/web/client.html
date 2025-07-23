@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Messenger</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f5f3f0 0%, #e8e4df 50%, #f0ede8 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Zen фоновые элементы */
+        .zen-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .zen-circle {
+            position: absolute;
+            border: 1px solid rgba(213, 203, 190, 0.2);
+            border-radius: 50%;
+            animation: breathe 8s ease-in-out infinite;
+        }
+
+        .zen-circle:nth-child(1) {
+            width: 300px;
+            height: 300px;
+            top: 10%;
+            left: 10%;
+            animation-delay: 0s;
+        }
+
+        .zen-circle:nth-child(2) {
+            width: 200px;
+            height: 200px;
+            top: 60%;
+            right: 15%;
+            animation-delay: 2s;
+        }
+
+        .zen-circle:nth-child(3) {
+            width: 150px;
+            height: 150px;
+            bottom: 20%;
+            left: 60%;
+            animation-delay: 4s;
+        }
+
+        @keyframes breathe {
+            0%, 100% {
+                transform: scale(1);
+                opacity: 0.3;
+            }
+            50% {
+                transform: scale(1.1);
+                opacity: 0.1;
+            }
+        }
+
+        .chat-container {
+            background: rgba(252, 250, 247, 0.9);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(226, 220, 213, 0.3);
+            border-radius: 24px;
+            box-shadow: 
+                0 20px 40px rgba(213, 203, 190, 0.15),
+                0 10px 20px rgba(213, 203, 190, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.8);
+            width: 100%;
+            max-width: 750px;
+            height: 600px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #f8f6f3 0%, #f2efeb 100%);
+            padding: 24px;
+            text-align: center;
+            border-bottom: 1px solid rgba(226, 220, 213, 0.2);
+            position: relative;
+        }
+
+        .chat-header h1 {
+            color: #8b7d6b;
+            font-size: 1.5rem;
+            font-weight: 300;
+            letter-spacing: 1px;
+            margin: 0;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #d4c4b0;
+            margin-left: 12px;
+            transition: all 0.4s ease;
+            box-shadow: 0 0 10px rgba(212, 196, 176, 0.4);
+        }
+
+        .status-indicator.connected {
+            background: #c8d4b8;
+            box-shadow: 0 0 15px rgba(200, 212, 184, 0.6);
+        }
+
+        .messages-container {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            background: transparent;
+            position: relative;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            padding: 14px 20px;
+            border-radius: 20px;
+            max-width: 75%;
+            animation: messageFloat 0.5s ease-out;
+            font-size: 14px;
+            line-height: 1.5;
+            font-weight: 400;
+            box-shadow: 0 2px 8px rgba(213, 203, 190, 0.1);
+            border: 1px solid rgba(226, 220, 213, 0.1);
+        }
+
+        @keyframes messageFloat {
+            from {
+                opacity: 0;
+                transform: translateY(15px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.info {
+            background: linear-gradient(135deg, #f3f1ee 0%, #ede9e4 100%);
+            color: #9b8f7e;
+            align-self: flex-start;
+        }
+
+        .message.connected {
+            background: linear-gradient(135deg, #f1f4ed 0%, #e8efdf 100%);
+            color: #7a8471;
+            align-self: flex-start;
+        }
+
+        .message.error {
+            background: linear-gradient(135deg, #f4f0ee 0%, #eee6e2 100%);
+            color: #a08680;
+            align-self: flex-start;
+        }
+
+        .message.sent {
+            background: linear-gradient(135deg, #e8e4df 0%, #ddd7d0 100%);
+            color: #6b5d52;
+            margin-left: auto;
+            align-self: flex-end;
+        }
+
+        .message.received {
+            background: linear-gradient(135deg, #f0ede8 0%, #e6e1dc 100%);
+            color: #756a5f;
+            align-self: flex-start;
+        }
+
+        .input-container {
+            padding: 24px;
+            background: rgba(248, 246, 243, 0.8);
+            border-top: 1px solid rgba(226, 220, 213, 0.2);
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 14px 20px;
+            border: 1px solid rgba(226, 220, 213, 0.3);
+            border-radius: 20px;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.3s ease;
+            background: rgba(252, 250, 247, 0.8);
+            color: #6b5d52;
+            font-family: inherit;
+            font-weight: 400;
+        }
+
+        .message-input::placeholder {
+            color: #b5a898;
+        }
+
+        .message-input:focus {
+            border-color: rgba(200, 212, 184, 0.5);
+            box-shadow: 0 0 0 3px rgba(200, 212, 184, 0.1);
+            background: rgba(255, 255, 255, 0.9);
+        }
+
+        .button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 18px;
+            font-size: 13px;
+            font-weight: 400;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            letter-spacing: 0.3px;
+            position: relative;
+            overflow: hidden;
+            font-family: inherit;
+            text-transform: none;
+        }
+
+        .button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            transition: all 0.4s ease;
+            transform: translate(-50%, -50%);
+        }
+
+        .button:hover::before {
+            width: 200px;
+            height: 200px;
+        }
+
+        .button.primary {
+            background: linear-gradient(135deg, #d4c4b0 0%, #c9b8a3 100%);
+            color: #6b5d52;
+            border: 1px solid rgba(203, 190, 175, 0.3);
+        }
+
+        .button.success {
+            background: linear-gradient(135deg, #c8d4b8 0%, #b8c9a3 100%);
+            color: #5a6651;
+            border: 1px solid rgba(184, 201, 163, 0.3);
+        }
+
+        .button.danger {
+            background: linear-gradient(135deg, #d4c0b8 0%, #c9aca3 100%);
+            color: #6b524d;
+            border: 1px solid rgba(201, 172, 163, 0.3);
+        }
+
+        .button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(213, 203, 190, 0.2);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Zen скроллбар */
+        .messages-container::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .messages-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .messages-container::-webkit-scrollbar-thumb {
+            background: rgba(213, 203, 190, 0.3);
+            border-radius: 2px;
+        }
+
+        .messages-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(213, 203, 190, 0.5);
+        }
+
+        /* Дыхание для particle */
+        .floating-elements {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .zen-dot {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: rgba(213, 203, 190, 0.4);
+            border-radius: 50%;
+            animation: zenFloat 12s infinite linear;
+        }
+
+        @keyframes zenFloat {
+            0% {
+                transform: translateY(100vh) rotate(0deg);
+                opacity: 0;
+            }
+            10% {
+                opacity: 0.4;
+            }
+            90% {
+                opacity: 0.4;
+            }
+            100% {
+                transform: translateY(-100px) rotate(180deg);
+                opacity: 0;
+            }
+        }
+
+        /* Адаптивность */
+        @media (max-width: 768px) {
+            .chat-container {
+                height: 100vh;
+                border-radius: 0;
+                max-width: 100%;
+            }
+            
+            .controls {
+                flex-direction: column;
+            }
+            
+            .button {
+                width: 100%;
+            }
+            
+            .input-container {
+                flex-direction: column;
+            }
+            
+            .message-input {
+                margin-bottom: 12px;
+            }
+        }
+
+        /* Медитативная пульсация */
+        @keyframes meditation {
+            0%, 100% {
+                transform: scale(1);
+                opacity: 0.1;
+            }
+            50% {
+                transform: scale(1.05);
+                opacity: 0.05;
+            }
+        }
+
+        .zen-pulse {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border: 1px solid rgba(213, 203, 190, 0.1);
+            border-radius: 24px;
+            animation: meditation 6s ease-in-out infinite;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="zen-bg">
+        <div class="zen-circle"></div>
+        <div class="zen-circle"></div>
+        <div class="zen-circle"></div>
+    </div>
+    
+    <div class="floating-elements"></div>
+    
+    <div class="chat-container">
+        <div class="zen-pulse"></div>
+        
+        <div class="chat-header">
+            <h1>zen messenger <span class="status-indicator" id="statusIndicator"></span></h1>
+        </div>
+        
+        <div class="messages-container" id="messages"></div>
+        
+        <div class="input-container">
+            <input type="text" id="messageInput" class="message-input" placeholder="type your message...">
+            <div class="controls">
+                <button class="button primary" onclick="sendMessage()" id="sendBtn">send</button>
+                <button class="button success" onclick="connect()" id="connectBtn">connect</button>
+                <button class="button danger" onclick="disconnect()" id="disconnectBtn">disconnect</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let authenticated = false;
+        const messages = document.getElementById('messages');
+        const statusIndicator = document.getElementById('statusIndicator');
+        
+        // Создаем zen частицы
+        function createZenDots() {
+            const container = document.querySelector('.floating-elements');
+            for (let i = 0; i < 20; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'zen-dot';
+                dot.style.left = Math.random() * 100 + '%';
+                dot.style.animationDelay = Math.random() * 12 + 's';
+                dot.style.animationDuration = (Math.random() * 8 + 10) + 's';
+                container.appendChild(dot);
+            }
+        }
+
+        function addMessage(text, type = 'info') {
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${type}`;
+            messageEl.innerHTML = `<strong>${new Date().toLocaleTimeString()}</strong> ${text}`;
+            messages.appendChild(messageEl);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            statusIndicator.className = `status-indicator ${connected ? 'connected' : ''}`;
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+            document.getElementById('sendBtn').disabled = !connected || !authenticated;
+        }
+
+        function connect() {
+            if (ws) {
+                addMessage('already connected', 'info');
+                return;
+            }
+
+            try {
+                ws = new WebSocket('ws://localhost:8080');
+
+                ws.addEventListener('open', (event) => {
+                    updateStatus(true);
+                    addMessage('connection established', 'connected');
+                    ws.send('Bearer mytoken');
+                    addMessage('auth token sent', 'info');
+                });
+
+                ws.addEventListener('message', (event) => {
+                    if (event.data === 'AUTH_SUCCESS') {
+                        authenticated = true;
+                        updateStatus(true);
+                        addMessage('authentication successful', 'connected');
+                    } else {
+                        addMessage(event.data, 'received');
+                    }
+                });
+
+                ws.addEventListener('close', (event) => {
+                    updateStatus(false);
+                    authenticated = false;
+                    addMessage(`connection closed (${event.code})`, 'error');
+                    ws = null;
+                });
+
+                ws.addEventListener('error', (event) => {
+                    addMessage('connection error', 'error');
+                    console.error('WebSocket error:', event);
+                });
+
+            } catch (error) {
+                addMessage('connection failed: ' + error.message, 'error');
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('please connect first', 'error');
+                return;
+            }
+
+            if (!authenticated) {
+                addMessage('please authenticate first', 'error');
+                return;
+            }
+
+            if (!input.value.trim()) {
+                addMessage('please enter a message', 'error');
+                return;
+            }
+
+            try {
+                ws.send(input.value);
+                addMessage(input.value, 'sent');
+                input.value = '';
+            } catch (error) {
+                addMessage('send failed: ' + error.message, 'error');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close(1000, 'user disconnect');
+                ws = null;
+                authenticated = false;
+                updateStatus(false);
+                addMessage('disconnected peacefully', 'info');
+            }
+        }
+
+        // Инициализация zen interface
+        document.addEventListener('DOMContentLoaded', () => {
+            createZenDots();
+            updateStatus(false);
+            
+            document.getElementById('messageInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

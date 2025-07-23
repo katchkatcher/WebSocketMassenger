@@ -1,0 +1,50 @@
+# Build директории
+build/
+out/
+cmake-build-*/
+
+# vcpkg (исключаем, т.к. пользователи должны устанавливать сами)
+vcpkg/
+vcpkg_installed/
+
+# IDE файлы
+.vs/
+.vscode/settings.json
+.vscode/launch.json
+*.user
+*.suo
+*.sdf
+*.opensdf
+
+# Compiled files
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.obj
+*.o
+
+# Logs
+*.log
+server.log
+
+# Temporary files
+*~
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Certificates
+certs/*.key
+certs/*.pem
+!certs/README.md
