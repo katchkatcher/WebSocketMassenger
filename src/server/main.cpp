@@ -30,7 +30,6 @@ enum LogType
     DEBUG
 };
 
-// 📝 УЛУЧШЕННЫЙ ЛОГГЕР
 class Logger
 {
 private:
@@ -260,7 +259,6 @@ private:
                 authenticated_ = true;
                 global_logger.sessionInfo(session_id_, "✅ Клиент успешно авторизован");
                 
-                // ✅ ИСПРАВЛЕНИЕ: Отправляем подтверждение авторизации
                 std::string auth_response = "AUTH_SUCCESS";
                 last_sent_message_ = auth_response;
                 
@@ -285,7 +283,6 @@ private:
             }
         }
 
-        // ✅ ИСПРАВЛЕНИЕ: Обрабатываем только авторизованные сообщения
         if (authenticated_)
         {
             std::string custom_message = "Echo: " + message + " [Server Response]";
