@@ -2,6 +2,7 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -21,6 +22,7 @@ namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = boost::asio::ip::tcp;
 using error_code = boost::system::error_code;
+using json = nlohmann::json;
 
 enum LogType
 {
@@ -38,7 +40,8 @@ private:
 
     void log(const std::string &message, LogType type)
     {
-        if(!logfile.is_open()) return;
+        if (!logfile.is_open())
+            return;
 
         std::lock_guard<std::mutex> guard(log_locker);
         std::string timestamp = make_timestamp();
@@ -48,7 +51,7 @@ private:
             auto thread_id = std::this_thread::get_id();
             std::ostringstream thread_stream;
             thread_stream << thread_id;
-            
+
             logfile << "[" << timestamp << "] "
                     << "[TH-" << thread_stream.str().substr(0, 6) << "] "
                     << "[" << logTypeToString(type) << "] "
@@ -58,8 +61,9 @@ private:
     }
 
 public:
-    Logger() : logfile("server.log", std::ios::app) {
-        if(!logfile.is_open())
+    Logger() : logfile("server.log", std::ios::app)
+    {
+        if (!logfile.is_open())
         {
             std::cerr << "❌ Не удалось открыть лог файл!" << std::endl;
         }
@@ -70,23 +74,23 @@ public:
         }
     }
 
-    ~Logger() 
+    ~Logger()
     {
-        if(logfile.is_open())
+        if (logfile.is_open())
         {
             log("=== 🛑 СЕРВЕР ОСТАНОВЛЕН ===", INFO);
             logfile.close();
         }
     }
 
-    // Улучшенный формат времени
     std::string make_timestamp()
     {
         auto now = std::chrono::system_clock::now();
         auto time_t = std::chrono::system_clock::to_time_t(now);
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()) % 1000;
-        
+                      now.time_since_epoch()) %
+                  1000;
+
         std::ostringstream oss;
         oss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
         oss << "." << std::setfill('0') << std::setw(3) << ms.count();
@@ -97,11 +101,16 @@ public:
     {
         switch (type)
         {
-        case INFO:    return "INFO ";
-        case ERRORS:  return "ERROR";
-        case WARNINGS:return "WARN ";
-        case DEBUG:   return "DEBUG";
-        default:      return "UNKNW";
+        case INFO:
+            return "INFO ";
+        case ERRORS:
+            return "ERROR";
+        case WARNINGS:
+            return "WARN ";
+        case DEBUG:
+            return "DEBUG";
+        default:
+            return "UNKNW";
         }
     }
 
@@ -112,39 +121,46 @@ public:
     void warning(const std::string &msg) { log(msg, WARNINGS); }
 
     // Логирование ошибок с кодами
-    void errorCode(boost::system::error_code ec, const char* what)
+    void errorCode(boost::system::error_code ec, const char *what)
     {
         log("❌ " + std::string(what) + ": " + ec.message() + " (код: " + std::to_string(ec.value()) + ")", ERRORS);
     }
 
     // Специализированные методы для сессий
-    void sessionInfo(int session_id, const std::string& msg) {
+    void sessionInfo(int session_id, const std::string &msg)
+    {
         log("👤 [S" + std::to_string(session_id) + "] " + msg, INFO);
     }
-    
-    void sessionDebug(int session_id, const std::string& msg) {
+
+    void sessionDebug(int session_id, const std::string &msg)
+    {
         log("🔧 [S" + std::to_string(session_id) + "] " + msg, DEBUG);
     }
-    
-    void sessionWarning(int session_id, const std::string& msg) {
+
+    void sessionWarning(int session_id, const std::string &msg)
+    {
         log("⚠️  [S" + std::to_string(session_id) + "] " + msg, WARNINGS);
     }
 
-    void sessionError(int session_id, const std::string& msg) {
+    void sessionError(int session_id, const std::string &msg)
+    {
         log("❌ [S" + std::to_string(session_id) + "] " + msg, ERRORS);
     }
 
     // Логирование сетевых событий
-    void serverEvent(const std::string& msg) {
+    void serverEvent(const std::string &msg)
+    {
         log("🌐 " + msg, INFO);
     }
 
-    void connectionEvent(const std::string& msg) {
+    void connectionEvent(const std::string &msg)
+    {
         log("🔌 " + msg, INFO);
     }
 
     // Логирование сообщений
-    void messageEvent(int session_id, const std::string& direction, const std::string& msg) {
+    void messageEvent(int session_id, const std::string &direction, const std::string &msg)
+    {
         std::string icon = (direction == "IN") ? "📥" : "📤";
         log(icon + " [S" + std::to_string(session_id) + "] " + direction + ": " + msg, DEBUG);
     }
@@ -162,11 +178,11 @@ class session : public std::enable_shared_from_this<session>
     static std::atomic<int> next_session_id;           // статический счетчик
     int session_id_;                                   // ID этой сессии
     std::string last_sent_message_;                    // Последнее отправленное сообщение
-    
+
 public:
     explicit session(tcp::socket &&socket)
-        :   ws_(std::move(socket)),
-            session_id_(++next_session_id) {}
+        : ws_(std::move(socket)),
+          session_id_(++next_session_id) {}
 
     void run()
     {
@@ -211,7 +227,7 @@ private:
             global_logger.sessionError(session_id_, "Ошибка при принятии соединения: " + ec.message());
             return;
         }
-        
+
         global_logger.connectionEvent("Новый клиент подключен [S" + std::to_string(session_id_) + "]");
         do_read();
     }
@@ -249,51 +265,112 @@ private:
             return;
         }
 
+        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
+        
         auto message = beast::buffers_to_string(buffer_.data());
         global_logger.messageEvent(session_id_, "IN", message);
-        
-        if (!authenticated_)
+
+        try
         {
-            if (message.find(valid_token_) != std::string::npos)
+            json parsed = json::parse(message);
+            std::string type;
+            if (parsed.contains("type") && parsed["type"].is_string())
             {
-                authenticated_ = true;
-                global_logger.sessionInfo(session_id_, "✅ Клиент успешно авторизован");
-                
-                std::string auth_response = "AUTH_SUCCESS";
-                last_sent_message_ = auth_response;
-                
-                ws_.text(true);
-                ws_.async_write(
-                    net::buffer(auth_response),
-                    beast::bind_front_handler(
-                        &session::on_write,
-                        shared_from_this()));
-                return; // ⚠️ ВАЖНО: выходим, не обрабатываем как обычное сообщение
-            } 
+                type = parsed["type"];
+                if (type == "auth")
+                {
+                    if (parsed.contains("token"))
+                    {
+                        std::string token = parsed["token"];
+                        if (token == valid_token_)
+                        {
+                            authenticated_ = true;
+                            global_logger.sessionInfo(session_id_, "✅ Клиент успешно авторизован");
+                            json auth_response =
+                                {
+                                    {"type", "auth"},
+                                    {"message", "AUTH_RESPONSE"}};
+                            last_sent_message_ = auth_response.dump(); // преобразуем в JSON строку
+                            ws_.text(true);
+                            ws_.async_write(
+                                net::buffer(auth_response.dump()),
+                                beast::bind_front_handler(&session::on_write, shared_from_this()));
+                            return;
+                        }
+                        else
+                        {
+                            // закрываем соединение
+                            global_logger.sessionWarning(session_id_, "🔐 Неверный токен авторизации");
+
+                            ws_.async_close(websocket::close_code::policy_error,
+                                            beast::bind_front_handler(
+                                                &session::on_close,
+                                                shared_from_this()));
+                            return;
+                        }
+                    }
+                }
+                else if (type == "message")
+                {
+                    if (!authenticated_)
+                    {
+                        global_logger.sessionWarning(session_id_, "🔐 Попытка отправки сообщения без авторизации");
+                        // как отправить JSON ошибку
+                        return;
+                    }
+                    if (parsed.contains("data"))
+                    {
+                        std::string msg_data = parsed["data"];
+
+                        json echo_response = {
+                            {"type", "message"},
+                            {"data", "Echo: " + msg_data + " [Server Response]"},
+                            {"timestamp", global_logger.make_timestamp()}};
+                        last_sent_message_ = echo_response.dump();
+                        ws_.text(true);
+                        ws_.async_write(
+                            net::buffer(echo_response.dump()),
+                            beast::bind_front_handler(&session::on_write, shared_from_this()));
+                        return;
+                    }
+                }
+                else if (type == "ping")
+                {
+                    json pong_response = {
+                        {"type", "pong"},
+                        {"timestamp", global_logger.make_timestamp()}};
+
+                    // отправляем pong
+                    last_sent_message_ = pong_response.dump();
+                    ws_.text(true);
+                    ws_.async_write(
+                        net::buffer(pong_response.dump()),
+                        beast::bind_front_handler(&session::on_write, shared_from_this()));
+                    return;
+                }
+                else
+                {
+                    global_logger.sessionWarning(session_id_, "🚫 Неизвестный тип сообщения: " + type);
+
+                    json error_response = {
+                        {"type", "error"},
+                        {"message", "Unknown message type: " + type}};
+                    last_sent_message_ = error_response.dump();
+                    ws_.text(true);
+                    ws_.async_write(
+                        net::buffer(error_response.dump()),
+                        beast::bind_front_handler(&session::on_write, shared_from_this()));
+                    return;
+                }
+            }
             else
             {
-                global_logger.sessionWarning(session_id_, "🔐 Неверный токен авторизации");
-                
-                // Закрываем соединение при неверном токене
-                ws_.async_close(websocket::close_code::policy_error,
-                    beast::bind_front_handler(
-                        &session::on_close,
-                        shared_from_this()));
-                return;
+                global_logger.sessionWarning(session_id_, "🚫 Отсутствует поле 'type' или оно не строка");
             }
         }
-
-        if (authenticated_)
+        catch (json::parse_error &e)
         {
-            std::string custom_message = "Echo: " + message + " [Server Response]";
-            last_sent_message_ = custom_message;
-
-            ws_.text(ws_.got_text());
-            ws_.async_write(
-                net::buffer(custom_message),
-                beast::bind_front_handler(
-                    &session::on_write,
-                    shared_from_this()));
+            global_logger.sessionWarning(session_id_, "🚫 Некорректный JSON: " + std::string(e.what()));
         }
     }
 
@@ -307,7 +384,6 @@ private:
             return;
         }
 
-        // ИСПРАВЛЕНИЕ: Логируем отправленное сообщение
         global_logger.messageEvent(session_id_, "OUT", last_sent_message_);
 
         // очистка буфера
@@ -388,10 +464,10 @@ private:
         {
             // Получаем информацию о клиенте
             auto remote_endpoint = socket.remote_endpoint();
-            global_logger.connectionEvent("Новое TCP соединение от " + 
-                remote_endpoint.address().to_string() + ":" + 
-                std::to_string(remote_endpoint.port()));
-                
+            global_logger.connectionEvent("Новое TCP соединение от " +
+                                          remote_endpoint.address().to_string() + ":" +
+                                          std::to_string(remote_endpoint.port()));
+
             std::make_shared<session>(std::move(socket))->run();
         }
 
@@ -435,8 +511,7 @@ int main(int argc, char *argv[])
         v.emplace_back([&ioc]
                        { 
                            global_logger.info("🔄 Рабочий поток запущен");
-                           ioc.run(); 
-                       });
+                           ioc.run(); });
     }
     ioc.run();
 
