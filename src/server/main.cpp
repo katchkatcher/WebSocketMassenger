@@ -15,6 +15,17 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
+#include <cstdio>
+#include <signal.h>
+#include <chrono>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
+#include <deque>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -61,7 +72,7 @@ private:
     }
 
 public:
-    Logger() : logfile("server.log", std::ios::app)
+    Logger() : logfile("server.log", std::ios::out | std::ios::trunc)
     {
         if (!logfile.is_open())
         {
@@ -87,12 +98,20 @@ public:
     {
         auto now = std::chrono::system_clock::now();
         auto time_t = std::chrono::system_clock::to_time_t(now);
+
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &time_t);
+#else
+        localtime_r(&time_t, &tm);
+#endif
+
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       now.time_since_epoch()) %
                   1000;
 
         std::ostringstream oss;
-        oss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+        oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
         oss << "." << std::setfill('0') << std::setw(3) << ms.count();
         return oss.str();
     }
@@ -168,21 +187,58 @@ public:
 
 Logger global_logger;
 
-// обратное эхо вебсокет сообщений(подключение, рукопожатие, взаимодействие)
+class session;
+
+class SessionManager
+{
+    std::unordered_map<int, std::shared_ptr<session>> sessions_;
+    std::unordered_set<std::string> used_usernames_;
+    std::unordered_map<int, std::string> session_to_username_;
+    std::mutex mutex_;
+
+public:
+    void add_session(int id, const std::string &username, std::shared_ptr<session> session); // добавлениие пользовательской сессии
+    void remove_session(int id);                                                             // удаление пользовательской сессии
+    void broadcast_message(const json &message, int sender_id = -1);                         // отправка всем пользователям
+    size_t get_user_count();                                                                 // количество онлайн пользователей
+    bool is_surname_taken(const std::string &username);                                      // проверка на то не занятое ли имя
+    void add_username(const std::string &username);                                          // добавление имени пользователя в список используемых
+    std::vector<std::string> get_user_list();                                                // получение списка пользователей
+};
+
+SessionManager global_session_manager;
+
 class session : public std::enable_shared_from_this<session>
 {
-    websocket::stream<beast::tcp_stream> ws_;          // основной поток websocket соедниения
-    beast::flat_buffer buffer_;                        // буфер для сообщений от клиента
-    const std::string valid_token_ = "Bearer mytoken"; // токен авторизации клиента
-    bool authenticated_ = false;                       // флаг аутентификации текущего клиента
-    static std::atomic<int> next_session_id;           // статический счетчик
-    int session_id_;                                   // ID этой сессии
-    std::string last_sent_message_;                    // Последнее отправленное сообщение
+    std::string username_;
+    websocket::stream<beast::tcp_stream> ws_;
+    beast::flat_buffer buffer_;
+    const std::string valid_token_ = "Bearer mytoken";
+    bool authenticated_ = false;
+    static std::atomic<int> next_session_id;
+    static std::atomic<int> temp_connection_id;
+    int session_id_ = -1; // Реальный ID сессии (-1 = не авторизован)
+    int connection_id_;   // Временный ID для логирования
+    std::string last_sent_message_;
+    std::atomic<bool> removed_ = false;
+
+    // Очередь исходящих сообщений (сериализованная запись)
+    std::deque<std::string> write_queue_;
 
 public:
     explicit session(tcp::socket &&socket)
         : ws_(std::move(socket)),
-          session_id_(++next_session_id) {}
+          connection_id_(++temp_connection_id)
+    {
+    }
+
+    ~session()
+    {
+        if (session_id_ > 0)
+        {
+            global_logger.sessionInfo(session_id_, "Деструктор сессии");
+        }
+    }
 
     void run()
     {
@@ -193,14 +249,81 @@ public:
                           shared_from_this()));
     }
 
+    void send_message(const json &message)
+    {
+        auto self = shared_from_this();
+        std::string payload = message.dump();
+        last_sent_message_ = payload;
+
+        // self - сессия
+        // payload - сообщение для отправки
+        net::post(ws_.get_executor(), [self, payload]()
+                  {
+            if (!self->ws_.is_open())
+            {
+                global_logger.sessionWarning(self->session_id_, "Попытка отправки в закрытое соединение");
+                return;
+            }
+            // флаг пустая ли очередь
+            bool idle = self->write_queue_.empty();
+            // сообщение в конец очереди
+            self->write_queue_.push_back(payload);
+            // если пустая отправляем
+            if (idle)
+            {
+                self->do_write();
+            } });
+    }
+
 private:
+    void do_write()
+    {
+        if (write_queue_.empty())
+            return;
+        ws_.text(true);
+        ws_.async_write(
+            net::buffer(write_queue_.front()),
+            beast::bind_front_handler(&session::on_write_queue, shared_from_this()));
+    }
+
+    void on_write_queue(error_code ec, std::size_t bytes_transferred)
+    {
+        boost::ignore_unused(bytes_transferred);
+        if (ec)
+        {
+            if (session_id_ > 0)
+            {
+                global_logger.sessionError(session_id_, "Ошибка отправки: " + ec.message());
+            }
+            else
+            {
+                global_logger.error("❌ [C" + std::to_string(connection_id_) + "] Ошибка отправки: " + ec.message());
+            }
+            // В случае ошибки закрываем соединение
+            ws_.async_close(websocket::close_code::normal,
+                            beast::bind_front_handler(&session::on_close, shared_from_this()));
+            return;
+        }
+
+        if (session_id_ > 0)
+        {
+            global_logger.messageEvent(session_id_, "OUT", write_queue_.front());
+        }
+        // очищаем в очередь
+        write_queue_.pop_front();
+        if (!write_queue_.empty())
+        {
+            do_write();
+        }
+    }
+
     void on_run()
     {
         // получаем сокет и устанавливаем таймаут в течение которого в случае бездействия клиента соединение закроется
         // get_lowest_layer - чистое TCP соединение без websocket обёртки
-        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
+        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(120));
 
-        // установка таймаута на websocket протокол(ping/pong)
+        // установка таймаута на websocket протокол, рекомендованные значения
         ws_.set_option(
             websocket::stream_base::timeout::suggested(
                 beast::role_type::server));
@@ -224,20 +347,29 @@ private:
     {
         if (ec)
         {
-            global_logger.sessionError(session_id_, "Ошибка при принятии соединения: " + ec.message());
+            global_logger.error("❌ [C" + std::to_string(connection_id_) + "] Ошибка при принятии соединения: " + ec.message());
             return;
         }
 
-        global_logger.connectionEvent("Новый клиент подключен [S" + std::to_string(session_id_) + "]");
         do_read();
     }
 
     void on_close(error_code ec)
     {
         if (ec)
-            global_logger.sessionError(session_id_, "Ошибка при закрытии: " + ec.message());
+        {
+            if (session_id_ > 0)
+            {
+                global_logger.sessionError(session_id_, "Ошибка при закрытии: " + ec.message());
+            }
+        }
 
-        global_logger.connectionEvent("Клиент отключился [S" + std::to_string(session_id_) + "]");
+        safe_remove_session();
+
+        if (session_id_ > 0)
+        {
+            global_logger.connectionEvent("Клиент отключился [S" + std::to_string(session_id_) + "]");
+        }
     }
 
     void do_read()
@@ -255,20 +387,35 @@ private:
 
         if (ec == websocket::error::closed)
         {
-            global_logger.sessionInfo(session_id_, "WebSocket соединение закрыто клиентом");
+            if (session_id_ > 0)
+            {
+                global_session_manager.remove_session(session_id_);
+                global_logger.sessionInfo(session_id_, "WebSocket соединение закрыто клиентом");
+            }
             return;
         }
 
         if (ec)
         {
-            global_logger.sessionError(session_id_, "Ошибка чтения: " + ec.message());
+            if (session_id_ > 0)
+            {
+                global_session_manager.remove_session(session_id_);
+                global_logger.sessionError(session_id_, "Ошибка чтения: " + ec.message());
+            }
             return;
         }
 
-        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
-        
+        beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(120));
+
         auto message = beast::buffers_to_string(buffer_.data());
-        global_logger.messageEvent(session_id_, "IN", message);
+        buffer_.consume(buffer_.size());
+
+        if (session_id_ > 0)
+        {
+            global_logger.messageEvent(session_id_, "IN", message);
+        }
+
+        bool should_continue_read = true;
 
         try
         {
@@ -279,88 +426,53 @@ private:
                 type = parsed["type"];
                 if (type == "auth")
                 {
-                    if (parsed.contains("token"))
-                    {
-                        std::string token = parsed["token"];
-                        if (token == valid_token_)
-                        {
-                            authenticated_ = true;
-                            global_logger.sessionInfo(session_id_, "✅ Клиент успешно авторизован");
-                            json auth_response =
-                                {
-                                    {"type", "auth"},
-                                    {"message", "AUTH_RESPONSE"}};
-                            last_sent_message_ = auth_response.dump(); // преобразуем в JSON строку
-                            ws_.text(true);
-                            ws_.async_write(
-                                net::buffer(auth_response.dump()),
-                                beast::bind_front_handler(&session::on_write, shared_from_this()));
-                            return;
-                        }
-                        else
-                        {
-                            // закрываем соединение
-                            global_logger.sessionWarning(session_id_, "🔐 Неверный токен авторизации");
-
-                            ws_.async_close(websocket::close_code::policy_error,
-                                            beast::bind_front_handler(
-                                                &session::on_close,
-                                                shared_from_this()));
-                            return;
-                        }
-                    }
+                    handle_auth_message(parsed);
                 }
                 else if (type == "message")
                 {
                     if (!authenticated_)
                     {
                         global_logger.sessionWarning(session_id_, "🔐 Попытка отправки сообщения без авторизации");
-                        // как отправить JSON ошибку
-                        return;
                     }
-                    if (parsed.contains("data"))
+                    else if (parsed.contains("data"))
                     {
                         std::string msg_data = parsed["data"];
-
-                        json echo_response = {
-                            {"type", "message"},
-                            {"data", "Echo: " + msg_data + " [Server Response]"},
-                            {"timestamp", global_logger.make_timestamp()}};
-                        last_sent_message_ = echo_response.dump();
-                        ws_.text(true);
-                        ws_.async_write(
-                            net::buffer(echo_response.dump()),
-                            beast::bind_front_handler(&session::on_write, shared_from_this()));
-                        return;
+                        json broadcast_message = {{"type", "message"},
+                                                  {"data", msg_data},
+                                                  {"sender_id", session_id_},
+                                                  {"from", username_},
+                                                  {"timestamp", global_logger.make_timestamp()}};
+                        global_session_manager.broadcast_message(broadcast_message, session_id_);
+                        global_logger.sessionInfo(session_id_, "Сообщение отправлено всем клиентам: " + msg_data);
                     }
                 }
                 else if (type == "ping")
                 {
-                    json pong_response = {
-                        {"type", "pong"},
-                        {"timestamp", global_logger.make_timestamp()}};
-
-                    // отправляем pong
-                    last_sent_message_ = pong_response.dump();
-                    ws_.text(true);
-                    ws_.async_write(
-                        net::buffer(pong_response.dump()),
-                        beast::bind_front_handler(&session::on_write, shared_from_this()));
-                    return;
+                    json pong_response = {{"type", "pong"}, {"timestamp", global_logger.make_timestamp()}};
+                    send_message(pong_response);
+                }
+                else if (type == "broadcast")
+                {
+                    if (!authenticated_)
+                    {
+                        global_logger.sessionWarning(session_id_, "🔐 Попытка broadcast без авторизации");
+                    }
+                    else if (parsed.contains("message"))
+                    {
+                        std::string msg_data = parsed["message"];
+                        json broadcast_message = {{"type", "broadcast"},
+                                                  {"from", username_},
+                                                  {"message", msg_data},
+                                                  {"timestamp", global_logger.make_timestamp()}};
+                        global_session_manager.broadcast_message(broadcast_message, session_id_);
+                        global_logger.sessionInfo(session_id_, "Broadcast сообщение от " + username_ + ": " + msg_data);
+                    }
                 }
                 else
                 {
                     global_logger.sessionWarning(session_id_, "🚫 Неизвестный тип сообщения: " + type);
-
-                    json error_response = {
-                        {"type", "error"},
-                        {"message", "Unknown message type: " + type}};
-                    last_sent_message_ = error_response.dump();
-                    ws_.text(true);
-                    ws_.async_write(
-                        net::buffer(error_response.dump()),
-                        beast::bind_front_handler(&session::on_write, shared_from_this()));
-                    return;
+                    json error_response = {{"type", "error"}, {"message", "Unknown message type: " + type}};
+                    send_message(error_response);
                 }
             }
             else
@@ -372,34 +484,196 @@ private:
         {
             global_logger.sessionWarning(session_id_, "🚫 Некорректный JSON: " + std::string(e.what()));
         }
+
+        if (should_continue_read)
+            do_read();
     }
 
-    void on_write(error_code ec, std::size_t bytes_transferred)
+    void handle_auth_message(const json &parsed)
     {
-        boost::ignore_unused(bytes_transferred);
-
-        if (ec)
+        if (!parsed.contains("token") || !parsed.contains("username"))
         {
-            global_logger.sessionError(session_id_, "Ошибка отправки: " + ec.message());
+            global_logger.warning("🔐 [C" + std::to_string(connection_id_) + "] Отсутствуют поля token или username");
+            return;
+        }
+        std::string token = parsed["token"];
+        std::string username = parsed["username"];
+
+        if (token != valid_token_)
+        {
+            global_logger.warning("🔐 [C" + std::to_string(connection_id_) + "] Неверный токен авторизации");
+            ws_.async_close(websocket::close_code::policy_error,
+                            beast::bind_front_handler(&session::on_close, shared_from_this()));
             return;
         }
 
-        global_logger.messageEvent(session_id_, "OUT", last_sent_message_);
+        if (username.empty())
+        {
+            json empty_name = {
+                {"type", "auth_error"},
+                {"message", "Пустое имя"}};
+            send_message(empty_name);
+            global_logger.warning("🔐 [C" + std::to_string(connection_id_) + "] Введена пустая строка");
+            return;
+        }
 
-        // очистка буфера
-        buffer_.consume(buffer_.size());
-        // читаем следующее сообщение
-        do_read();
+        if (global_session_manager.is_surname_taken(username))
+        {
+            json name_taken = {
+                {"type", "auth_error"},
+                {"message", "Имя уже занято. Введите другое"}};
+            send_message(name_taken);
+
+            global_logger.info("🚫 Авторизация отклонена - имя занято: " + username);
+
+            ws_.async_close(websocket::close_code::policy_error,
+                            beast::bind_front_handler(&session::on_close, shared_from_this()));
+            return;
+        }
+
+        session_id_ = ++next_session_id;
+        username_ = username;
+        authenticated_ = true;
+
+        global_logger.connectionEvent("Новый клиент подключен [S" + std::to_string(session_id_) + "] как: " + username_);
+
+        global_session_manager.add_session(session_id_, username_, shared_from_this());
+
+        json auth_response = {
+            {"type", "auth"},
+            {"message", "AUTH_RESPONSE"}};
+        send_message(auth_response);
+
+        json user_list = {
+            {"type", "user_list"},
+            {"users", global_session_manager.get_user_list()}};
+        send_message(user_list);
+
+        json user_joined = {
+            {"type", "user_joined"},
+            {"username", username_}};
+        global_session_manager.broadcast_message(user_joined, session_id_);
+    }
+
+    void safe_remove_session()
+    {
+        bool expected = false;
+        // сравнивает и заменяет в случае если флаги равны. (expected)false -> true
+        if (removed_.compare_exchange_strong(expected, true))
+        {
+            // удаление сессии
+            global_session_manager.remove_session(session_id_);
+        }
     }
 };
 
 std::atomic<int> session::next_session_id{0};
+std::atomic<int> session::temp_connection_id{0};
+
+void SessionManager::add_session(int id, const std::string &username, std::shared_ptr<session> session)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    sessions_[id] = std::move(session);
+    session_to_username_[id] = username;
+    used_usernames_.insert(username);
+    global_logger.info("👥 Пользователь добавлен: " + username + ". Всего: " + std::to_string(sessions_.size()));
+}
+
+void SessionManager::remove_session(int id)
+{
+    std::vector<std::shared_ptr<session>> targets;
+    std::string username;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto itName = session_to_username_.find(id);
+        if (itName != session_to_username_.end())
+        {
+            username = itName->second;
+            used_usernames_.erase(username);
+            session_to_username_.erase(itName);
+            global_logger.info("👥 Освобождено имя: " + username);
+        }
+
+        // Скопируем получателей для нотификации user_left
+        for (auto &[sid, sp] : sessions_)
+        {
+            if (sid != id && sp)
+                targets.push_back(sp);
+        }
+
+        sessions_.erase(id);
+    }
+
+    // Уведомим остальных вне лока
+    if (!username.empty())
+    {
+        json user_left = {{"type", "user_left"}, {"username", username}};
+        for (auto &s : targets)
+            s->send_message(user_left);
+    }
+
+    global_logger.info("👥 Пользователь отключился. Всего: " + std::to_string(get_user_count()));
+}
+
+void SessionManager::broadcast_message(const json &message, int sender_id)
+{
+    global_logger.debug("📡 Начало broadcast от сессии " + std::to_string(sender_id));
+    std::vector<std::shared_ptr<session>> targets;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto &[id, sp] : sessions_)
+        {
+            if (id != sender_id && sp)
+            {
+                targets.push_back(sp);
+                global_logger.debug("📡 Добавлен получатель: " + std::to_string(id));
+            }
+        }
+    }
+
+    global_logger.debug("📡 Отправка " + std::to_string(targets.size()) + " получателям");
+    for (auto &s : targets)
+        s->send_message(message);
+    global_logger.debug("📡 Broadcast завершен");
+}
+
+size_t SessionManager::get_user_count()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return sessions_.size();
+}
+
+bool SessionManager::is_surname_taken(const std::string &username)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (username.empty())
+        return true;
+    return used_usernames_.find(username) != used_usernames_.end();
+}
+
+void SessionManager::add_username(const std::string &username)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    used_usernames_.insert(username);
+}
+
+std::vector<std::string> SessionManager::get_user_list()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> users;
+    users.reserve(session_to_username_.size());
+    for (auto &p : session_to_username_)
+        users.push_back(p.second);
+    std::sort(users.begin(), users.end());
+    return users;
+}
 
 // слушает подключения
 class listener : public std::enable_shared_from_this<listener>
 {
     net::io_context &ioc_;
     tcp::acceptor acceptor_;
+    bool ready_ = false; // флаг успешной инициализации
 
 public:
     listener(net::io_context &ioc, tcp::endpoint endpoint)
@@ -415,13 +689,24 @@ public:
             return;
         }
 
+        // включаем REUSEADDR на всех платформах
+        // мгновенное переиспользование адреса
         acceptor_.set_option(net::socket_base::reuse_address(true), ec);
         if (ec)
         {
-            global_logger.errorCode(ec, "Установка опций acceptor");
+            global_logger.errorCode(ec, "Установка REUSEADDR");
             return;
         }
 
+        // отключение Nagle для уменьшения задержки
+        acceptor_.set_option(tcp::no_delay(true), ec);
+        if (ec)
+        {
+            global_logger.errorCode(ec, "Установка no_delay");
+            return;
+        }
+
+        // Привязка к адресу
         acceptor_.bind(endpoint, ec);
         if (ec)
         {
@@ -429,6 +714,7 @@ public:
             return;
         }
 
+        // Запуск прослушивания
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
         if (ec)
         {
@@ -436,17 +722,38 @@ public:
             return;
         }
 
+        ready_ = true;
+        try
+        {
+            auto lep = acceptor_.local_endpoint();
+            global_logger.serverEvent("Acceptor слушает на " + lep.address().to_string() + ":" + std::to_string(lep.port()));
+        }
+        catch (...)
+        {
+        }
         global_logger.serverEvent("Acceptor настроен и готов к приему соединений");
     }
 
+    bool is_ready() const noexcept { return ready_ && acceptor_.is_open(); }
+
     void run()
     {
+        if (!ready_ || !acceptor_.is_open())
+        {
+            global_logger.error("Acceptor не готов. Прослушивание не запущено.");
+            return;
+        }
         do_accept();
     }
 
 private:
     void do_accept()
     {
+        if (!acceptor_.is_open())
+        {
+            global_logger.error("Попытка принять соединение на закрытом acceptor");
+            return;
+        }
         acceptor_.async_accept(
             net::make_strand(ioc_),
             beast::bind_front_handler(
@@ -462,18 +769,36 @@ private:
         }
         else
         {
-            // Получаем информацию о клиенте
-            auto remote_endpoint = socket.remote_endpoint();
-            global_logger.connectionEvent("Новое TCP соединение от " +
-                                          remote_endpoint.address().to_string() + ":" +
-                                          std::to_string(remote_endpoint.port()));
+            try
+            {
+                auto remote_endpoint = socket.remote_endpoint();
+                global_logger.connectionEvent("Новое TCP соединение от " +
+                                              remote_endpoint.address().to_string() + ":" +
+                                              std::to_string(remote_endpoint.port()));
+            }
+            catch (const std::exception &ex)
+            {
+                global_logger.warning(std::string("Не удалось получить remote_endpoint: ") + ex.what());
+            }
 
+            // создаём объект сессии и запускаем
             std::make_shared<session>(std::move(socket))->run();
         }
 
-        do_accept();
+        // Продолжаем принимать, только если acceptor всё ещё открыт
+        if (acceptor_.is_open())
+            do_accept();
     }
 };
+
+void signal_handler(int signal)
+{
+    global_logger.info("=== ПОЛУЧЕН СИГНАЛ ЗАВЕРШЕНИЯ ===");
+    global_logger.info("Очистка ресурсов...");
+    global_logger.info("Активных сессий: " + std::to_string(global_session_manager.get_user_count()));
+    global_logger.info("=== СЕРВЕР ОСТАНОВЛЕН ===");
+    exit(signal);
+}
 
 int main(int argc, char *argv[])
 {
@@ -490,6 +815,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
     auto const address = net::ip::make_address(argv[1]);
     auto const port = static_cast<unsigned short>(std::atoi(argv[2]));
     auto const threads = std::max<int>(1, std::atoi(argv[3]));
@@ -500,7 +828,13 @@ int main(int argc, char *argv[])
     global_logger.info("📍 Адрес: " + address.to_string() + ":" + std::to_string(port));
     global_logger.info("🧵 Потоков: " + std::to_string(threads));
 
-    std::make_shared<listener>(ioc, tcp::endpoint{address, port})->run();
+    auto lst = std::make_shared<listener>(ioc, tcp::endpoint{address, port});
+    if (!lst->is_ready())
+    {
+        global_logger.error("Не удалось инициализировать acceptor. Завершение.");
+        return EXIT_FAILURE;
+    }
+    lst->run();
 
     global_logger.serverEvent("👂 Сервер готов к приему соединений");
 

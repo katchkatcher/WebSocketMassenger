@@ -4,10 +4,17 @@ let isConnected = false;
 let isAuthenticated = false;
 let pingInterval = null;
 let reconnectTimeout = null;
+let currentUsername = "";
 
 // === ЭЛЕМЕНТЫ DOM ===
 let messagesList, messageInput, sendBtn, connectionStatus;
 let connectionDot, authDot, pingDot;
+let usernameModal = null;
+let usernameInput = null;
+let joinBtn = null;
+let authError = null;
+let usersListEl = null;
+let usersCountEl = null;
 
 // === УТИЛИТЫ ===
 function escapeHtml(text) {
@@ -23,6 +30,36 @@ function formatTime(date) {
     });
 }
 
+function setUsers(users) {
+    usersListEl.innerHTML = '';
+    users.forEach(u => {
+        const item = document.createElement('div');
+        item.className = 'user-item';
+        item.textContent = u;
+        usersListEl.appendChild(item);
+    });
+    usersCountEl.textContent = users.length;
+}
+
+function addUser(u) {
+    const exists = Array.from(usersListEl.children).some(el => el.textContent === u);
+    if (!exists) {
+        const item = document.createElement('div');
+        item.className = 'user-item';
+        item.textContent = u;
+        usersListEl.appendChild(item);
+        usersCountEl.textContent = String(Number(usersCountEl.textContent) + 1);
+    }
+}
+
+function removeUser(u) {
+    const child = Array.from(usersListEl.children).find(el => el.textContent === u);
+    if (child) {
+        usersListEl.removeChild(child);
+        usersCountEl.textContent = String(Math.max(0, Number(usersCountEl.textContent) - 1));
+    }
+}
+
 // === WEBSOCKET ЛОГИКА ===
 function connect() {
     updateConnectionStatus("Подключение...");
@@ -31,7 +68,6 @@ function connect() {
         ws = new WebSocket(CONFIG.WS_URL);
 
         ws.onopen = function () {
-            console.log("✅ Подключен к серверу");
             isConnected = true;
             updateStatusIndicators();
             updateConnectionStatus("Авторизация...");
@@ -56,7 +92,6 @@ function connect() {
         };
 
         ws.onclose = function (event) {
-            console.log("🔌 Соединение закрыто, код:", event.code);
             isConnected = false;
             isAuthenticated = false;
             updateStatusIndicators();
@@ -100,7 +135,8 @@ function scheduleReconnect() {
 function sendAuth() {
     const authMessage = {
         type: "auth",
-        token: CONFIG.AUTH_TOKEN
+        token: CONFIG.AUTH_TOKEN, 
+        username: currentUsername
     };
 
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -110,14 +146,14 @@ function sendAuth() {
 
 function sendMessage(text) {
     const message = {
-        type: "message",
-        data: text,
+        type: "broadcast",
+        message: text,
         timestamp: new Date().toISOString()
     };
 
     if (ws && ws.readyState === WebSocket.OPEN && isAuthenticated) {
         ws.send(JSON.stringify(message));
-        addMessage("Вы", text, new Date(), true);
+        addMessage(currentUsername, text, new Date(), true); 
         return true;
     }
     return false;
@@ -140,34 +176,52 @@ function sendPing() {
 function handleMessage(response) {
     switch (response.type) {
         case "auth":
-            console.log("Получен ответ авторизации:", response);
-
             if (response.message === "AUTH_RESPONSE") {
-                console.log("Успешная авторизация");
                 isAuthenticated = true;
                 updateStatusIndicators();
                 updateConnectionStatus("Подключён и авторизован");
                 enableInput();
                 addSystemMessage("Авторизация успешна");
-            }
-            else {
-                console.log("Авторизация не удалась");
+            } else {
                 addSystemMessage("Ошибка авторизации");
             }
             break;
 
+        case "user_list":
+            if (Array.isArray(response.users)) {
+                setUsers(response.users);
+            }
+            break;
+
+        case "user_joined":
+            addSystemMessage(`${response.username} присоединился к чату`);
+            addUser(response.username);
+            break;
+
+        case "user_left":
+            addSystemMessage(`${response.username} покинул чат`);
+            removeUser(response.username);
+            break;
+
         case "message":
-            console.log("Получено сообщение:", response.data);
-            addMessage("Сервер", response.data, new Date(response.timestamp));
+            addMessage(response.from || "Сервер", response.data, new Date(response.timestamp));
+            break;
+
+        case "broadcast":
+            addMessage(response.from, response.message, new Date(response.timestamp), false);
             break;
 
         case "pong":
-            console.log("🏓 Pong получен");
+            // no-op; индикатор уже мигает при отправке
             break;
 
         case "error":
-            console.error("❌ Ошибка сервера:", response.message);
-            addSystemMessage("Ошибка: " + response.message);
+        case "auth_error":
+            showUsernameModal();
+            showAuthError(response.message || "Ошибка");
+            isAuthenticated = false;
+            updateStatusIndicators();
+            updateConnectionStatus("Ошибка авторизации");
             break;
 
         default:
@@ -177,25 +231,15 @@ function handleMessage(response) {
 
 // === UI УПРАВЛЕНИЕ ===
 function updateStatusIndicators() {
-    // Соединение
     connectionDot.className = 'indicator-dot';
-    if (isConnected) {
-        connectionDot.classList.add('connected');
-    }
+    if (isConnected) connectionDot.classList.add('connected');
 
-    // Авторизация
     authDot.className = 'indicator-dot';
-    if (isAuthenticated) {
-        authDot.classList.add('connected');
-    } else if (isConnected) {
-        authDot.classList.add('warning');
-    }
+    if (isAuthenticated) authDot.classList.add('connected');
+    else if (isConnected) authDot.classList.add('warning');
 
-    // Ping (всегда активен при подключении)
     pingDot.className = 'indicator-dot';
-    if (isConnected) {
-        pingDot.classList.add('connected');
-    }
+    if (isConnected) pingDot.classList.add('connected');
 }
 
 function updateConnectionStatus(status) {
@@ -213,6 +257,25 @@ function disableInput() {
     sendBtn.disabled = true;
 }
 
+
+
+function isScrolledToBottom() {
+    const threshold = 50; 
+    return messagesList.scrollTop >= (messagesList.scrollHeight - messagesList.clientHeight - threshold);
+}
+
+function scrollToBottom() {
+    messagesList.scrollTop = messagesList.scrollHeight;
+}
+
+function smartScrollToBottom() {
+    if (isScrolledToBottom()) {
+        requestAnimationFrame(() => {
+            scrollToBottom();
+        });
+    }
+}
+
 function addMessage(sender, text, timestamp = new Date(), isOwn = false) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isOwn ? 'own' : ''}`;
@@ -226,7 +289,12 @@ function addMessage(sender, text, timestamp = new Date(), isOwn = false) {
     `;
 
     messagesList.appendChild(messageDiv);
-    messagesList.scrollTop = messagesList.scrollHeight;
+
+    if (isOwn) {
+        scrollToBottom();
+    } else {
+        smartScrollToBottom();
+    }
 }
 
 function addSystemMessage(text) {
@@ -242,7 +310,8 @@ function addSystemMessage(text) {
     `;
 
     messagesList.appendChild(messageDiv);
-    messagesList.scrollTop = messagesList.scrollHeight;
+    
+    smartScrollToBottom();
 }
 
 // === PING СИСТЕМА ===
@@ -260,7 +329,6 @@ function stopPing() {
 
 // === EVENT LISTENERS ===
 function setupEventListeners() {
-    // Отправка сообщения
     sendBtn.addEventListener('click', function () {
         const text = messageInput.value.trim();
         if (text && sendMessage(text)) {
@@ -268,7 +336,6 @@ function setupEventListeners() {
         }
     });
 
-    // Enter для отправки
     messageInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -276,15 +343,62 @@ function setupEventListeners() {
         }
     });
 
-    // Закрытие при выходе со страницы
+    messagesList.addEventListener('dblclick', function() {
+        scrollToBottom();
+    });
+
     window.addEventListener('beforeunload', function () {
         disconnect();
     });
+
+    joinBtn.addEventListener('click', handleUsernameSubmit);
+    usernameInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleUsernameSubmit();
+        }
+    });
+}
+
+// === МОДАЛЬНОЕ ОКНО ===
+function showUsernameModal() {
+    usernameModal.style.display = 'flex';
+    usernameInput.focus();
+}
+
+function hideUsernameModal() {
+    usernameModal.style.display = 'none';
+}
+
+function showAuthError(message) {
+    authError.textContent = message;
+    authError.style.display = 'block';
+}
+
+function hideAuthError() {
+    authError.style.display = 'none';
+}
+
+function handleUsernameSubmit() {
+    const username = usernameInput.value.trim();
+    if (!username) {
+        showAuthError("Пожалуйста, введите ваше имя");
+        return;
+    }
+    if (username.length > 20) {
+        showAuthError("Имя слишком длинное (максимум 20 символов)");
+        return;
+    }
+
+    currentUsername = username;
+    hideAuthError();
+    hideUsernameModal();
+    updateConnectionStatus("Подключение...");
+    connect();
 }
 
 // === ИНИЦИАЛИЗАЦИЯ ===
 document.addEventListener('DOMContentLoaded', function () {
-    // Получение элементов DOM
     messagesList = document.getElementById('chat-messages');
     messageInput = document.getElementById('message-input');
     sendBtn = document.getElementById('send-btn');
@@ -292,15 +406,15 @@ document.addEventListener('DOMContentLoaded', function () {
     connectionDot = document.getElementById('connection-dot');
     authDot = document.getElementById('auth-dot');
     pingDot = document.getElementById('ping-dot');
+    usernameModal = document.getElementById('username-modal');
+    usernameInput = document.getElementById('username-input');
+    joinBtn = document.getElementById('join-btn');
+    authError = document.getElementById('auth-error');
+    usersListEl = document.getElementById('users-list');
+    usersCountEl = document.getElementById('users-count');
 
-    // Настройка обработчиков
     setupEventListeners();
-
-    // Инициализация состояния
     updateStatusIndicators();
     disableInput();
-
-    // Автоматическое подключение
-    addSystemMessage("Инициализация подключения...");
-    setTimeout(connect, 500);
+    showUsernameModal();
 });

@@ -1,6 +1,0 @@
-# пакеты
-vcpkg install boost-beast:x64-windows
-vcpkg install boost-system:x64-windows  
-vcpkg install boost-thread:x64-windows
-vcpkg install openssl:x64-windows
-vcpkg install nlohmann-json:x64-windows
