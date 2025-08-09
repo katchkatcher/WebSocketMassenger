@@ -34,7 +34,7 @@ vcpkg install boost-beast:x64-windows boost-asio:x64-windows boost-system:x64-wi
 3. Соберите проект
 ```
 mkdir build && cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake .. "-DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release -G "MinGW Makefiles"
 cmake --build . --config Release
 ```
 4. Запуск
