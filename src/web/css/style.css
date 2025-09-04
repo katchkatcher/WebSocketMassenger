@@ -76,6 +76,17 @@ body {
     gap: 0.75rem;
 }
 
+.room-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--bg-secondary);
+    padding: 0.25rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--border-radius);
+    box-shadow: 0 2px 8px var(--shadow);
+}
+
 .users-count {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
@@ -205,4 +216,63 @@ body {
     .messages-container {
         min-height: 150px;
     }
+}
+
+#room-input {
+    width: 140px;
+    max-width: 180px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    padding: 0.2rem 0.3rem;
+    outline: none;
+}
+
+#room-input::placeholder {
+    color: var(--text-muted);
+}
+
+#room-input:focus {
+    outline: none;
+}
+
+.join-btn {
+    padding: 0.6rem;
+    background: var(--accent);
+    color: #fff;
+    border: none; /* как у .send-btn */
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    box-shadow: 0 2px 8px var(--shadow);
+}
+
+.join-btn:hover:not(:disabled) { background: #a07d5a; transform: translateY(-1px); }
+.join-btn:active { transform: translateY(0); }
+.join-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.join-btn .icon {
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
+/* Состояние фокуса для доступности */
+.room-controls:has(#room-input:focus),
+.join-btn:focus-visible {
+    box-shadow: 0 0 0 3px rgba(184, 149, 107, 0.25);
+    outline: none;
+}
+
+/* Адаптив */
+@media (max-width: 500px) {
+    #room-input { width: 110px; }
 }
