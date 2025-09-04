@@ -9,7 +9,7 @@
 #include <boost/system/error_code.hpp>
 #include <memory>
 #include <string>
-#include <iostream>  // Добавили этот include для std::cerr
+#include <iostream>  
 
 class Logger {
 public:
@@ -17,13 +17,11 @@ public:
            size_t max_size = 5 * 1024 * 1024, size_t max_files = 3);
     ~Logger();
 
-    // Basic log methods - используем простые перегрузки вместо шаблонов
     void info(const std::string& message);
     void debug(const std::string& message);
     void warn(const std::string& message);
     void error(const std::string& message);
 
-    // Template methods для форматирования
     template<typename... Args>
     void info(const std::string& fmt, Args&&... args) {
         try {

@@ -36,9 +36,7 @@ Logger::~Logger() {
             spdlog::drop(logger_->name());
             logger_.reset();
         }
-        
-        // Note: We don't call spdlog::shutdown() here as it may be called by main
-        
+                
     } catch (const std::exception& e) {
         std::cerr << "Logger destructor error: " << e.what() << std::endl;
     }
