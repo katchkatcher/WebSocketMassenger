@@ -16,6 +16,7 @@ find_package(Boost 1.78 REQUIRED COMPONENTS system thread program_options)
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(utf8cpp CONFIG REQUIRED)
 
 # Executable
 add_executable(WebSocketServer src/server/main.cpp src/server/config.cpp src/server/logger.cpp)
@@ -36,6 +37,7 @@ target_link_libraries(WebSocketServer PRIVATE
     OpenSSL::SSL OpenSSL::Crypto
     nlohmann_json::nlohmann_json
     spdlog::spdlog
+    utf8cpp::utf8cpp
 )
 
 if(WIN32)
