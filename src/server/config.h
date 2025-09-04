@@ -7,7 +7,6 @@
 #include <boost/system/error_code.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
-// Config struct: Holds server settings with defaults. Loaded from CLI/JSON/env.
 struct Config {
     // Network settings
     std::string address = "127.0.0.1";  // Localhost for dev safety (override for prod)
@@ -38,7 +37,7 @@ struct Config {
 
     void load(int argc, char* argv[]);  // Parse CLI, then JSON, then env overrides
     void validate() const;  // Throw if invalid (called after load)
-    void print_config() const; // Для отладки
+    void print_config() const;  // for debug
 };
 
 #endif
