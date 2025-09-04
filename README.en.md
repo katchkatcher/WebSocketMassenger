@@ -46,6 +46,12 @@ Lightweight multi-user chat server in C++ with room support and UTF-8
 - Connection status indicators
 - User join/leave notifications
 - Room control interface
+---
+## Скриншоты
+
+![Authentification](docs/images/auth.png)
+![Chat Interface](docs/images/chat.png)
+![Communication in rooms](docs/images/rooms.png)
 
 ---
 
