@@ -10,6 +10,7 @@
 ![CMake 3.16+](https://img.shields.io/badge/CMake-3.16%2B-blue)
 ![Windows/Linux](https://img.shields.io/badge/OS-Windows%20%7C%20Linux-lightgrey)
 
+[Английская версия](README.en.md)
 
 </div>
 
