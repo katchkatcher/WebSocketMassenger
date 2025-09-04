@@ -54,12 +54,21 @@
 - **Компилятор C++17**: GCC 8+, Clang 9+, MSVC 2019+
 - **Git** для vcpkg
 
-### 1. Установка зависимостей через vcpkg
+### 1. Установка vcpkg
+```bash
+# Клонировать vcpkg в любое удобное место(рекомендую в папку проекта)
+git clone https://github.com/Microsoft/vcpkg.git
+cd vcpkg
+
+# Собрать vcpkg 
+./bootstrap-vcpkg.sh  # Linux/macOS
+# или
+./bootstrap-vcpkg.bat  # Windows
+```
+
+### 2. Установка зависимостей через vcpkg
 
 ```bash
-# Клонировать репозиторий (если vcpkg/ отсутствует)
-git submodule update --init --recursive
-
 # Установить пакеты
 ./vcpkg/vcpkg install boost-beast
 ./vcpkg/vcpkg install boost-system  

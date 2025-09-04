@@ -55,6 +55,17 @@ Lightweight multi-user chat server in C++ with room support and UTF-8
 - **CMake** 3.20+
 - **C++17 Compiler**: GCC 8+, Clang 9+, MSVC 2019+
 - **Git** for vcpkg
+### 1. vcpkg installation
+```bash
+# Clone vcpkg to any convenient location (I recommend to the project folder)
+git clone https://github.com/Microsoft/vcpkg.git
+cd vcpkg
+
+# Compile vcpkg
+./bootstrap-vcpkg.sh  # Linux/macOS
+# else
+./bootstrap-vcpkg.bat  # Windows
+```
 
 ### 1. Install Dependencies via vcpkg
 
