@@ -52,6 +52,7 @@
 
 ![Аутентификация](docs/images/auth.png)
 ![Интерфейс чата](docs/images/chat.png)
+![Общение в комнатах](docs/images/rooms.png)
 
 ---
 
