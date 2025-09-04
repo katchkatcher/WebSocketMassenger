@@ -16,6 +16,14 @@
             </div>
             <h2>WebSocket Messenger</h2>
             <div class="right-header">
+                <div class="room-controls" title="Войти в комнату">
+                    <input type="text" id="room-input" placeholder="Комната" value="general" aria-label="Комната">
+                    <button id="join-room-btn" class="join-btn" aria-label="Войти в комнату">
+                        <svg viewBox="0 0 24 24" class="icon" aria-hidden="true">
+                            <path d="M12 4l1.41 1.41L8.83 10H21v2H8.83l4.58 4.59L12 18l-8-8 8-8z" fill="currentColor"/>
+                        </svg>
+                    </button>
+                </div>
                 <div id="users-count" class="users-count">0</div>
                 <div class="connection-status" id="connection-status">Отключен</div>
             </div>
@@ -40,7 +48,7 @@
         </div>
     </div>
 
-    <div id="username-modal" class="modal">
+    <div id="username-modal" class="modal" style="display:none;">
         <div class="modal-content">
             <h3>Добро пожаловать в WebSocket Messenger</h3>
             <p>Введите ваше имя для начала общения:</p>
@@ -48,7 +56,7 @@
             <div class="modal-buttons">
                 <button id="join-btn">Войти в чат</button>
             </div>
-            <div id="auth-error" class="error-message" style="display: none;"></div>
+            <div id="auth-error" class="error-message" style="display:none;"></div>
         </div>
     </div>
 

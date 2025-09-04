@@ -5,6 +5,7 @@ let isAuthenticated = false;
 let pingInterval = null;
 let reconnectTimeout = null;
 let currentUsername = "";
+let currentRoom = "general"; 
 
 // === ЭЛЕМЕНТЫ DOM ===
 let messagesList, messageInput, sendBtn, connectionStatus;
@@ -15,6 +16,8 @@ let joinBtn = null;
 let authError = null;
 let usersListEl = null;
 let usersCountEl = null;
+let roomInputEl = null;
+let roomJoinBtn = null;
 
 // === УТИЛИТЫ ===
 function escapeHtml(text) {
@@ -172,6 +175,16 @@ function sendPing() {
     }
 }
 
+function joinRoom(room) {
+    const target = (room || "").trim();
+    if (!target) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !isAuthenticated) return;
+
+    ws.send(JSON.stringify({ type: "join_room", room: target }));
+    currentRoom = target;
+    addSystemMessage(`Комната: ${currentRoom}`);
+}
+
 // === ОБРАБОТКА СООБЩЕНИЙ ===
 function handleMessage(response) {
     switch (response.type) {
@@ -182,6 +195,8 @@ function handleMessage(response) {
                 updateConnectionStatus("Подключён и авторизован");
                 enableInput();
                 addSystemMessage("Авторизация успешна");
+            
+                joinRoom(currentRoom);
             } else {
                 addSystemMessage("Ошибка авторизации");
             }
@@ -190,6 +205,13 @@ function handleMessage(response) {
         case "user_list":
             if (Array.isArray(response.users)) {
                 setUsers(response.users);
+            }
+            break;
+
+        case "users":
+            if (Array.isArray(response.users) || Array.isArray(response.list)) {
+                const list = Array.isArray(response.users) ? response.users : response.list;
+                setUsers(list);
             }
             break;
 
@@ -211,8 +233,30 @@ function handleMessage(response) {
             addMessage(response.from, response.message, new Date(response.timestamp), false);
             break;
 
+        case "room_history":
+        case "history": {
+            const msgs = Array.isArray(response.messages) ? response.messages : [];
+            const atBottom = isScrolledToBottom();
+            msgs.forEach(m => {
+                const from = m.from || m.username || "Сервер";
+                const text = m.message ?? m.text ?? m.data ?? "";
+                const ts = m.timestamp ? new Date(m.timestamp) : new Date();
+                const mine = from === currentUsername;
+                addMessage(from, String(text), ts, mine);
+            });
+            if (atBottom) scrollToBottom();
+            break;
+        }
+
+        case "joined_room":
+        case "room_joined":
+            if (response.room) {
+                currentRoom = response.room;
+                addSystemMessage(`Вошли в комнату: ${currentRoom}`);
+            }
+            break;
+
         case "pong":
-            // no-op; индикатор уже мигает при отправке
             break;
 
         case "error":
@@ -249,12 +293,16 @@ function updateConnectionStatus(status) {
 function enableInput() {
     messageInput.disabled = false;
     sendBtn.disabled = false;
+    roomInputEl.disabled = false;           // добавлено
+    roomJoinBtn.disabled = false;           // добавлено
     messageInput.focus();
 }
 
 function disableInput() {
     messageInput.disabled = true;
     sendBtn.disabled = true;
+    roomInputEl.disabled = true;            // добавлено
+    roomJoinBtn.disabled = true;            // добавлено
 }
 
 
@@ -358,6 +406,21 @@ function setupEventListeners() {
             handleUsernameSubmit();
         }
     });
+
+    // добавлено: управление комнатой
+    if (roomJoinBtn && roomInputEl) {
+        roomJoinBtn.addEventListener('click', () => {
+            const room = roomInputEl.value.trim();
+            if (room) joinRoom(room);
+        });
+        roomInputEl.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const room = roomInputEl.value.trim();
+                if (room) joinRoom(room);
+            }
+        });
+    }
 }
 
 // === МОДАЛЬНОЕ ОКНО ===
@@ -412,6 +475,8 @@ document.addEventListener('DOMContentLoaded', function () {
     authError = document.getElementById('auth-error');
     usersListEl = document.getElementById('users-list');
     usersCountEl = document.getElementById('users-count');
+    roomInputEl = document.getElementById('room-input');
+    roomJoinBtn = document.getElementById('join-room-btn');
 
     setupEventListeners();
     updateStatusIndicators();
