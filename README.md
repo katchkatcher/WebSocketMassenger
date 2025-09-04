@@ -77,7 +77,7 @@ cd vcpkg
 ./vcpkg/vcpkg install openssl
 ./vcpkg/vcpkg install nlohmann-json
 ./vcpkg/vcpkg install spdlog
-./vcpkg/vcpkg install utf8cpp
+./vcpkg/vcpkg install utfcpp
 ```
 
 ### 2. Сборка проекта
