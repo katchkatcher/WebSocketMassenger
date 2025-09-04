@@ -1,6 +1,4 @@
-#ifndef CONFIG_H
-#define CONFIG_H
-
+#pragma once
 #include <string>
 #include <chrono>
 #include <boost/program_options.hpp>
@@ -36,8 +34,6 @@ struct Config {
     size_t min_username_length = 3;
 
     void load(int argc, char* argv[]);  // Parse CLI, then JSON, then env overrides
-    void validate() const;  // Throw if invalid (called after load)
-    void print_config() const;  // for debug
+    void validate() const;              // Throw if invalid (called after load)
+    void print_config() const;          // for debug
 };
-
-#endif

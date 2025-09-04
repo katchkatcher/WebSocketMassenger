@@ -65,3 +65,34 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/certs")
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/certs" "$<TARGET_FILE_DIR:WebSocketServer>/certs"
     )
 endif()
+
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+)
+
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+add_executable(unit_tests
+  src/tests/test_config.cpp
+  src/tests/test_logger.cpp
+
+  src/server/config.cpp
+  src/server/logger.cpp
+)
+
+target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_link_libraries(unit_tests PRIVATE
+  GTest::gtest_main
+  Boost::program_options
+  spdlog::spdlog
+  nlohmann_json::nlohmann_json
+)
+
+include(GoogleTest)
+gtest_discover_tests(unit_tests)

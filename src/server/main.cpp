@@ -137,6 +137,7 @@ class session : public std::enable_shared_from_this<session>
     const Config &cfg_;
     std::deque<std::string> write_queue_;
     std::atomic<bool> writing_{false};
+    size_t dropped_out_messages_ = 0;
     std::chrono::steady_clock::time_point last_msg_time_;
     size_t message_count_in_window_ = 0;
     std::chrono::steady_clock::time_point rate_limit_window_start_;
@@ -157,7 +158,8 @@ public:
     {
         if (session_id_ > 0)
         {
-            g_logger->sessionInfo(session_id_, "Session destructor");
+            g_logger->sessionInfo(session_id_, "Session destructor (dropped_out_messages={})",
+                                  dropped_out_messages_);
         }
     }
 
@@ -195,17 +197,6 @@ public:
     {
         if (closing_.load() || g_shutdown_requested.load())
         {
-            return;
-        }
-
-        // Rate limiting check
-        if (!check_rate_limit())
-        {
-            g_logger->sessionWarning(session_id_, "Rate limit exceeded");
-            json error_msg = {
-                {"type", "error"},
-                {"message", "Rate limit exceeded. Please slow down."}};
-            queue_message(error_msg.dump());
             return;
         }
 
@@ -264,6 +255,7 @@ private:
             // Manage queue size
             if (self->write_queue_.size() >= self->cfg_.max_queue_size) {
                 self->write_queue_.pop_front();
+                ++self->dropped_out_messages_; 
                 g_logger->sessionWarning(self->session_id_, "Write queue full, dropping oldest message");
             }
 
@@ -333,6 +325,8 @@ private:
                         std::string(BOOST_BEAST_VERSION_STRING) + " websocket-messenger");
             }));
 
+        ws_.read_message_max(cfg_.max_message_size);
+
         ws_.async_accept(beast::bind_front_handler(&session::on_accept, shared_from_this()));
     }
 
@@ -390,6 +384,19 @@ private:
                 {"message", "Message too large"}};
             send_message(error_response);
             do_read();
+            return;
+        }
+
+        if (!check_rate_limit())
+        {
+            g_logger->sessionWarning(session_id_, "Rate limit exceeded (incoming)");
+            json error_msg =
+                {
+                    {"type", "error"},
+                    {"message", "Rate limit exceeded. Please slow down."}};
+            send_message(error_msg);
+            if (!closing_.load())
+                do_read();
             return;
         }
 
@@ -865,18 +872,6 @@ void SessionManager::shutdown_all()
         session_ptr->shutdown();
     }
 
-    // Give sessions time to close gracefully
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        sessions_.clear();
-        used_usernames_.clear();
-        session_to_username_.clear();
-        session_to_room_.clear();     
-        room_history_.clear();     
-    }
-
     g_logger->info("All sessions shut down");
 }
 
@@ -1027,24 +1022,25 @@ int main(int argc, char *argv[])
 
         net::io_context ioc{threads};
 
+        auto lst = std::make_shared<listener>(ioc, tcp::endpoint{address, port}, cfg);
+        lst->run();
+
         // Setup signal handling for graceful shutdown
         net::signal_set signals(ioc, SIGINT, SIGTERM);
-        signals.async_wait([&](error_code const &, int signal)
+        signals.async_wait([&, lst](error_code const &, int signal)
                            {
             g_logger->serverEvent("Shutdown signal received ({})", signal);
             g_shutdown_requested = true;
+
+            lst->stop();
             
-            // Shutdown sessions first
+ 
             g_session_manager->shutdown_all();
             
-            // Stop io_context
+       
             ioc.stop();
             
             g_logger->serverEvent("Server shutdown complete"); });
-
-        // Create and start listener
-        auto lst = std::make_shared<listener>(ioc, tcp::endpoint{address, port}, cfg);
-        lst->run();
 
         g_logger->serverEvent("WebSocket Messenger Server started");
         g_logger->serverEvent("Listening on {}:{}", address.to_string(), port);
